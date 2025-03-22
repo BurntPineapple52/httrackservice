@@ -2,7 +2,7 @@ name: Mirror Website and Push to New Repo
 
 on:
   repository_dispatch:
-    types: [run-httrack]
+    types: [trigger-httrack]
 
 jobs:
   run-httrack:
