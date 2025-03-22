@@ -41,7 +41,7 @@ jobs:
           NEW_REPO_NAME: ${{ github.event.client_payload.repo_name }}
         run: |
           # Set GH_TOKEN directly in the run block
-          export GH_TOKEN="${{ secrets.GITHUBTOKEN_TOKEN }}"
+          export GH_TOKEN=${{ secrets.GITHUBTOKEN_TOKEN }}
           # Create a new public repository; add --private if you prefer private.
           gh repo create "${{ github.repository_owner }}/${NEW_REPO_NAME}" --public --confirm
 
