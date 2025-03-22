@@ -4,6 +4,14 @@ on:
   repository_dispatch:
     types: [trigger-httrack]
 
+permissions:
+  contents: write
+  issues: write
+  repository-projects: write
+  actions: write
+  pull-requests: write
+  id-token: write
+
 jobs:
   trigger-httrack:
     runs-on: ubuntu-latest
@@ -44,12 +52,16 @@ jobs:
 
       - name: Initialize repository and push mirror
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUBTOKEN_TOKEN }}  # Use the SAME TOKEN HERE
           NEW_REPO_NAME: ${{ github.event.client_payload.repo_name }}
         run: |
           git init
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "GitHub Actions"
+          git remote add origin https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/${NEW_REPO_NAME}.git
+          # Explicitly configure git credentials
+          git config --global credential.helper store
+          echo "https://x-access-token:${GH_TOKEN}@github.com" > ~/.git-credentials
           git add .
           git commit -m "Mirrored website from ${{ github.event.client_payload.website }}"
-          # Set the remote URL using token-based authentication.
-          git remote add origin https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/${NEW_REPO_NAME}.git
           git push -u origin master
