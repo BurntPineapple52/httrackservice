@@ -38,6 +38,7 @@ jobs:
 
       - name: Create a new repository
         env:
+          GH_TOKEN: ${{ secrets.GITHUBTOKEN_TOKEN }}  # Set GH_TOKEN here
           NEW_REPO_NAME: ${{ github.event.client_payload.repo_name }}
         run: |
           # Create a new public repository; add --private if you prefer private.
