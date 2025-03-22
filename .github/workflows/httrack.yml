@@ -32,6 +32,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUBTOKEN_TOKEN }}
         run: |
+          echo "Authenticating with GH_TOKEN..."
           echo "$GH_TOKEN" | gh auth login --with-token
 
       - name: Create a new repository
