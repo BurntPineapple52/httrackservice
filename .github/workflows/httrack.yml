@@ -38,24 +38,23 @@ jobs:
 
       - name: Create a new repository
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEW_REPO_NAME: ${{ github.event.client_payload.repo_name }}
         run: |
-          # Set GH_TOKEN directly in the run block
-          export GH_TOKEN=${{ secrets.GITHUBTOKEN_TOKEN }}
           # Create a new public repository; add --private if you prefer private.
           gh repo create "${{ github.repository_owner }}/${NEW_REPO_NAME}" --public --confirm
 
       - name: Initialize repository and push mirror
         env:
-          GH_TOKEN: ${{ secrets.GITHUBTOKEN_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEW_REPO_NAME: ${{ github.event.client_payload.repo_name }}
         run: |
           git init
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
           # Set the remote URL with the token embedded
-          git remote add origin https://github.com/${{ github.repository_owner }}/${NEW_REPO_NAME}.git
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/${NEW_REPO_NAME}.git"
+          git remote add origin https://github.com/${{ github.repository_owner }}/${NEW_REPO_NAME}}.git
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/${NEW_REPO_NAME}}.git"
           git add .
           git commit -m "Mirrored website from ${{ github.event.client_payload.website }}"
           git push -u origin master
