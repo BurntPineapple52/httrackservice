@@ -17,7 +17,8 @@ permissions:
       packages: write
       issues: write
       pull-requests: write
-      repository: write
+      deployments: write
+      repository-projects: write
       actions: read
       checks: write
   
