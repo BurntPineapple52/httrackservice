@@ -51,7 +51,7 @@ jobs:
           REPO_NAME: "cloned-website-${{ github.run_id }}" # Generate repo name here
           REPO_DESCRIPTION: "Cloned website of ${{ github.event.inputs.websiteUrl }}"
         run: |
-          gh repo create "${{ github.repository_owner }}/${REPO_NAME}" --public --description "$REPO_DESCRIPTION" --clone=false --remote=origin
+          gh repo create "${{ github.repository_owner }}/${REPO_NAME}" --public --description "$REPO_DESCRIPTION" --clone=false
           echo "repo_name=$REPO_NAME" >> $GITHUB_OUTPUT
 
       - name: Initialize repository and push mirror
