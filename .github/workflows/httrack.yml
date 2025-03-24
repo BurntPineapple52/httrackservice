@@ -13,8 +13,13 @@ on:
         type: string
 
 permissions:
-  contents: write # Required to create repository and push code
-  repository-projects: write
+      contents: write
+      packages: write
+      issues: write
+      pull-requests: write
+      repository: write
+      actions: read
+      checks: write
   
 
 jobs:
