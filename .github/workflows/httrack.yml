@@ -37,7 +37,6 @@ jobs:
           OUTPUT_DIR="cloned_website"
           httrack "${{ github.event.inputs.websiteUrl }}" \
             -O "$OUTPUT_DIR" \
-            --depth=10 \
             --mirror \
             --user-agent "Mozilla/5.0" \
             --disable-security-limits \
