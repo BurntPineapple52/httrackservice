@@ -13,15 +13,14 @@ on:
         type: string
 
 permissions:
-      contents: write
-      packages: write
-      issues: write
-      pull-requests: write
-      deployments: write
-      repository-projects: write
-      actions: read
-      checks: write
-  
+  contents: write  # Needed for pushing to the new repo
+  packages: write
+  issues: write
+  pull-requests: write
+  deployments: write
+  repository-projects: write
+  actions: read
+  checks: write
 
 jobs:
   clone_and_upload:
@@ -52,23 +51,32 @@ jobs:
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
 
+      - name: Authenticate GitHub CLI with PAT
+        env:
+          GH_TOKEN: ${{ secrets.CloudflareWorker }}  # Use your PAT
+        run: |
+          gh auth login --with-token <<< "$GH_TOKEN"
+
       - name: Create a new repository
         id: create_repo
         env:
-          GITHUB_TOKEN: ${{ github.token }} # Use github.token
-          REPO_NAME: "cloned-website-${{ github.run_id }}" # Generate repo name here
+          GH_TOKEN: ${{ secrets.CloudflareWorker }}  # Use PAT instead of github.token
+          REPO_NAME: "cloned-website-${{ github.run_id }}"
           REPO_DESCRIPTION: "Cloned website of ${{ github.event.inputs.websiteUrl }}"
         run: |
-          gh repo create "${{ github.repository_owner }}/${REPO_NAME}" --public --description "$REPO_DESCRIPTION" --clone=false
+          gh repo create "${{ github.repository_owner }}/${REPO_NAME}" \
+            --public \
+            --description "$REPO_DESCRIPTION" \
+            --clone=false
           echo "repo_name=$REPO_NAME" >> $GITHUB_OUTPUT
 
       - name: Initialize repository and push mirror
         env:
-          GITHUB_TOKEN: ${{ github.token }} # Use github.token
+          GH_TOKEN: ${{ secrets.CloudflareWorker }}  # Use PAT for git push
         run: |
           REPO_NAME="${{ steps.create_repo.outputs.repo_name }}"
           OUTPUT_DIR="${{ steps.httrack_clone.outputs.output_dir }}"
-          REPO_URL="https://github.com/${{ github.repository_owner }}/${REPO_NAME}.git"
+          REPO_URL="https://${{ github.repository_owner }}:$GH_TOKEN@github.com/${{ github.repository_owner }}/${REPO_NAME}.git"
 
           cd "$OUTPUT_DIR" # Navigate into the cloned website directory
           git init
