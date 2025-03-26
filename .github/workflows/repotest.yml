@@ -1,45 +1,24 @@
-name: Test Repo Creation
-
-on:
+name: Create Repo
+on: 
   workflow_dispatch:
-
-permissions:
-  repository-projects: write # Grant permission to create repositories
+    inputs:
+      repo-name: 
+        description: 'Name of the repository to be created'
+        required: true
+        default: 'RepoCreateTest'
 
 jobs:
-  test_create_repo:
+  create-repository:
     runs-on: ubuntu-latest
+    name: Creating Organization Repository
     steps:
-      - name: Install GitHub CLI
-        run: sudo apt-get update && sudo apt-get install -y gh
-
-      - name: Attempt to Create Test Repository
-        id: create_repo_step
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          TEST_REPO_NAME: "test-repo-creation-action" # Fixed test repo name - will likely fail if run repeatedly due to name collision
-          REPO_DESCRIPTION: "Test repository created by GitHub Action"
-        run: |
-          REPO_FULL_NAME="BurntPineapple52/${TEST_REPO_NAME}" # Replace BurntPineapple52 with your username if needed
-
-          gh repo create "$REPO_FULL_NAME" --public --description "$REPO_DESCRIPTION" --clone=false
-          REPO_CREATE_STATUS=$? # Capture exit code of gh repo create command
-
-          if [ "$REPO_CREATE_STATUS" -eq 0 ]; then
-            echo "Repository '$REPO_FULL_NAME' creation SUCCESSFUL!"
-            echo "status=success" >> $GITHUB_OUTPUT # Set output for success
-          else
-            echo "Repository '$REPO_FULL_NAME' creation FAILED!"
-            echo "status=failure" >> $GITHUB_OUTPUT # Set output for failure
-            echo "Error Code: $REPO_CREATE_STATUS"
-            gh api -X POST /repos/BurntPineapple52/test-repo-creation-action # Example API call if you want to get more detailed error info (may need different permissions for this)
-          fi
-        shell: bash # Explicitly use bash shell
-
-      - name: Output Status
-        if: always() # Run this step regardless of previous step's success/failure
-        run: |
-          echo "Repository Creation Test Status: ${{ steps.create_repo_step.outputs.status }}"
-          if ${{ steps.create_repo_step.outputs.status == 'failure' }}; then
-            echo "Check the logs for the 'Attempt to Create Test Repository' step for details on the failure."
-          fi
+      - name: Use Node.js
+        uses: actions/setup-node@v2
+      - name: Creating GitHub Organization Repository
+        uses: repo-ctrl/create-repo-action@main 
+        id: create-repo
+        with:
+          repo-name: '${{ github.event.inputs.repo-name }}'
+          org-admin-token: '${{ secrets.ORG_ADMIN_TOKEN }}'
+      - name: Log URL to the repo
+        run: echo "The new repo is ${{ steps.create-repo.outputs.repo-url }}"
