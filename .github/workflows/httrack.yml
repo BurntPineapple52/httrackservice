@@ -73,8 +73,9 @@ jobs:
           REPO_URL="https://${{ github.repository_owner }}:${{ secrets.CloudflareWorker }}@github.com/${{ github.repository_owner }}/${REPO_NAME}.git"
 
           cd "$OUTPUT_DIR"
-          git init
+          git init -b main  # Key fix here
           git remote add origin "$REPO_URL"
           git add .
           git commit -m "Mirrored website from ${{ github.event.inputs.websiteUrl }}"
           git push -u origin main
+
