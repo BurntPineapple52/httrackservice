@@ -1,23 +1,21 @@
-name: Create Repository with GH CLI  
+name: Create Repo with GH CLI
+on: workflow_dispatch
 
-on:  
-  workflow_dispatch:  
-
-jobs:  
-  create-repo:  
-    runs-on: ubuntu-latest  
-    steps:  
-      - name: Create repo using GH CLI  
-        env:  
-          GH_TOKEN: ${{ secrets.CloudflareWorker }}  # Your PAT stored in GitHub Secrets  
-        run: |  
-          gh api \  
-            --method POST \  
-            -H "Accept: application/vnd.github+json" \  
-            -H "X-GitHub-Api-Version: 2022-11-28" \  
-            /user/repos \  
-            -f "name=Hello-World" \  
-            -f "description=This is your first repo!" \  
-            -f "homepage=https://github.com" \  
-            -F "private=false" \  
-            -F "is_template=true"  
+jobs:
+  create-repo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create repo
+        env:
+          GH_TOKEN: ${{ secrets.CloudflareWorker }}  # Uses repo secret
+        run: |
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /user/repos \
+            -f "name=Hello-World" \
+            -f "description=This is your first repo!" \
+            -f "homepage=https://github.com" \
+            -F "private=false" \
+            -F "is_template=true"
