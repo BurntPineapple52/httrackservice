@@ -145,33 +145,42 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         id: deploy_pages
-        # Only run if previous steps succeeded
-        if: steps.status_init.outputs.status != 'failure' && steps.push_code.outcome == 'success'
+        if: steps.push_code.outcome == 'success' # Make sure push succeeded
         run: |
           REPO_NAME="${{ steps.create_repo.outputs.repo_name }}"
           PROJECT_NAME="${REPO_NAME}" # Use repo name for CF Pages project name
           REPO_URL="https://github.com/${{ github.repository_owner }}/${REPO_NAME}"
 
           echo "Deploying $REPO_NAME to Cloudflare Pages as $PROJECT_NAME"
-          # Run wrangler pages deploy and capture output (including stderr)
-          DEPLOY_OUTPUT=$(wrangler pages deploy "$REPO_URL" --project-name="$PROJECT_NAME" --branch="main" 2>&1)
+          # Run wrangler using npx and capture output (including stderr)
+          # PREPEND npx here VVVVV
+          DEPLOY_OUTPUT=$(npx wrangler pages deploy "$REPO_URL" --project-name="$PROJECT_NAME" --branch="main" 2>&1)
           echo "$DEPLOY_OUTPUT" # Log output for debugging
+
+          # Check wrangler exit status explicitly
+          WRANGLER_EXIT_CODE=$?
+          if [ $WRANGLER_EXIT_CODE -ne 0 ]; then
+             echo "Wrangler command failed with exit code $WRANGLER_EXIT_CODE."
+             echo "$DEPLOY_OUTPUT" # Print error output
+             echo "status=failure" >> $GITHUB_OUTPUT
+             echo "error_message=Wrangler deployment command failed (Code: $WRANGLER_EXIT_CODE)." >> $GITHUB_OUTPUT
+             exit 1
+          fi
 
           # Extract the deployment URL (adjust grep/sed if output format changes)
           PREVIEW_URL=$(echo "$DEPLOY_OUTPUT" | grep -o 'https://.*\.pages\.dev')
 
           if [ -z "$PREVIEW_URL" ]; then
-             echo "Failed to deploy to Cloudflare Pages or extract URL."
-             echo "$DEPLOY_OUTPUT" # Print error output
+             echo "Failed to deploy to Cloudflare Pages or extract URL from output."
+             echo "$DEPLOY_OUTPUT" # Print potentially useful output even if URL isn't found
              echo "status=failure" >> $GITHUB_OUTPUT
-             echo "error_message=Failed to deploy to Cloudflare Pages." >> $GITHUB_OUTPUT
+             echo "error_message=Failed to deploy or extract Cloudflare Pages URL." >> $GITHUB_OUTPUT
              exit 1
           fi
 
           echo "Deployment successful: $PREVIEW_URL"
           echo "preview_url=$PREVIEW_URL" >> $GITHUB_OUTPUT
           echo "status=success" >> $GITHUB_OUTPUT # Mark success only after successful deployment
-
            # This step consolidates the final status for the callback
       - name: Set Final Status
         id: final_status
