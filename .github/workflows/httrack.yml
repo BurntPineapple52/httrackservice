@@ -58,16 +58,18 @@ jobs:
           git config --global user.name "GitHub Actions Migration Bot"
           echo "status=running_git_config" >> $GITHUB_OUTPUT
 
-      - name: Authenticate GitHub CLI
+      - name: Verify GitHub CLI Authentication (Implicit via GH_TOKEN)
         id: authenticate_gh
         env:
-          GH_TOKEN: ${{ secrets.CLOUDFLARE_WORKER_PAT }} # Use the PAT renamed secret
+          # Ensure GH_TOKEN is set for gh commands in this step
+          GH_TOKEN: ${{ secrets.CLOUDFLARE_WORKER_PAT }}
         run: |
-          # Log in using the token passed via stdin
-          echo $GH_TOKEN | gh auth login --with-token
-          # REMOVED: gh auth status # This command was likely causing the failure
-          echo "GH CLI authentication command executed."
-          # We rely on subsequent gh commands working implicitly with the token.
+          echo "Verifying GH CLI authentication using GH_TOKEN env var..."
+          # Run a command that requires authentication to check if it works
+          gh auth status
+          # Or, more specific check:
+          # gh api user
+          echo "GH CLI authentication appears successful."
           echo "status=running_gh_auth" >> $GITHUB_OUTPUT
 
       - name: Run httrack to mirror website
