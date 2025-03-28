@@ -181,6 +181,7 @@ jobs:
           echo "Deployment successful: $PREVIEW_URL"
           echo "preview_url=$PREVIEW_URL" >> $GITHUB_OUTPUT
           echo "status=success" >> $GITHUB_OUTPUT # Mark success only after successful deployment
+           
            # This step consolidates the final status for the callback
       - name: Set Final Status
         id: final_status
