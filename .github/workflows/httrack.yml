@@ -1,4 +1,4 @@
-name: Clone Website and Upload
+name: Clone, Upload, Deploy to Pages, and Callback
 
 on:
   workflow_dispatch:
@@ -8,73 +8,231 @@ on:
         required: true
         type: string
       email:
-        description: 'User Email (for notification - optional)'
+        description: 'User Email for notification'
         required: true
         type: string
 
+# Permissions: Only need contents: write for creating/pushing repo.
+# Wrangler uses its own Cloudflare token for deployment.
 permissions:
-  contents: write
-  packages: write
-  issues: write
-  pull-requests: write
-  deployments: write
-  repository-projects: write
-  actions: read
-  checks: write
+  contents: write # Allows creating repos and pushing code via PAT
 
 jobs:
-  clone_and_upload:
+  clone_deploy_callback:
     runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.final_status.outputs.status }}
+      preview_url: ${{ steps.final_status.outputs.preview_url }}
+      error_message: ${{ steps.final_status.outputs.error_message }}
+    env: # Make Cloudflare credentials available to steps
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
-      - name: Install required tools
+      - name: Initialize Status
+        id: status_init
         run: |
-          sudo apt-get update
-          sudo apt-get install -y httrack git gh
+          echo "status=pending" >> $GITHUB_OUTPUT
+          echo "error_message=Workflow started" >> $GITHUB_OUTPUT
+          echo "preview_url=''" >> $GITHUB_OUTPUT
+
+      - name: Install required tools
+        id: install_tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y httrack git gh jq curl npm
+          echo "status=running_install" >> $GITHUB_OUTPUT
+      - name: Install Wrangler CLI
+        id: install_wrangler
+        run: |
+          npm install -g wrangler
+          echo "status=running_wrangler_install" >> $GITHUB_OUTPUT
+
+      - name: Configure git
+        id: configure_git
+        run: |
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions Migration Bot"
+          echo "status=running_git_config" >> $GITHUB_OUTPUT
+
+      - name: Authenticate GitHub CLI
+        id: authenticate_gh
+        env:
+          GH_TOKEN: ${{ secrets.CLOUDFLARE_WORKER_PAT }} # Use the PAT renamed secret
+        run: |
+          echo $GH_TOKEN | gh auth login --with-token
+          gh auth status # Verify authentication
+          echo "status=running_gh_auth" >> $GITHUB_OUTPUT
 
       - name: Run httrack to mirror website
         id: httrack_clone
         run: |
-          OUTPUT_DIR="cloned_website"
+          OUTPUT_DIR="cloned_website_${{ github.run_id }}"
+          echo "Cloning ${{ github.event.inputs.websiteUrl }} into $OUTPUT_DIR"
           httrack "${{ github.event.inputs.websiteUrl }}" \
             -O "$OUTPUT_DIR" \
-            --depth=1 \
-            --user-agent "Mozilla/5.0" \
+            --depth=2 \
+            --stay-on-same-address \
+            --user-agent "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
             --disable-security-limits \
             --robots=0 \
-            +*.js
+            --verbose \
+            +*.png +*.gif +*.jpg +*.jpeg +*.svg +*.css +*.js # Common file types
+          # Basic check if httrack created the directory and index file
+          if [ ! -d "$OUTPUT_DIR" ] || [ ! -f "$OUTPUT_DIR/index.html" ]; then
+            echo "HTTrack failed to create output directory or index.html"
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "error_message=HTTrack failed to clone the site properly." >> $GITHUB_OUTPUT
+            exit 1
+          fi
           echo "output_dir=$OUTPUT_DIR" >> $GITHUB_OUTPUT
+          echo "status=running_httrack" >> $GITHUB_OUTPUT
 
-      - name: Configure git
-        run: |
-          git config --global user.email "github-actions@github.com"
-          git config --global user.name "GitHub Actions"
-
-      - name: Authenticate GitHub CLI
-        run: |
-          echo "${{ secrets.CloudflareWorker }}" | gh auth login --with-token
-
-      - name: Create a new repository
+      - name: Create new GitHub repository
         id: create_repo
+        # Only run if httrack succeeded
+        if: steps.status_init.outputs.status != 'failure' && steps.httrack_clone.outcome == 'success'
         env:
-          REPO_NAME: "cloned-website-${{ github.run_id }}"
-          REPO_DESCRIPTION: "Cloned website of ${{ github.event.inputs.websiteUrl }}"
+          GH_REPO_NAME: "migrated-${{ github.run_id }}" # Unique repo name
+          GH_REPO_DESCRIPTION: "Migrated site for ${{ github.event.inputs.websiteUrl }}"
         run: |
-          gh repo create "${{ github.repository_owner }}/${REPO_NAME}" \
-            --public \
-            --description "$REPO_DESCRIPTION" \
-            --clone=false
-          echo "repo_name=$REPO_NAME" >> $GITHUB_OUTPUT
+          echo "Creating repository ${{ github.repository_owner }}/${GH_REPO_NAME}"
+          # Use gh cli to create repo
+          if ! gh repo create "${{ github.repository_owner }}/${GH_REPO_NAME}" --public --description "$GH_REPO_DESCRIPTION" --clone=false; then
+             echo "Failed to create GitHub repository."
+             echo "status=failure" >> $GITHUB_OUTPUT
+             echo "error_message=Failed to create the GitHub repository." >> $GITHUB_OUTPUT
+             exit 1
+          fi
+          echo "repo_name=${GH_REPO_NAME}" >> $GITHUB_OUTPUT
+          echo "status=running_repo_create" >> $GITHUB_OUTPUT
 
       - name: Initialize repository and push mirror
+        id: push_code
+        # Only run if previous steps succeeded
+        if: steps.status_init.outputs.status != 'failure' && steps.create_repo.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.CLOUDFLARE_WORKER_PAT }}
         run: |
           REPO_NAME="${{ steps.create_repo.outputs.repo_name }}"
           OUTPUT_DIR="${{ steps.httrack_clone.outputs.output_dir }}"
-          REPO_URL="https://${{ github.repository_owner }}:${{ secrets.CloudflareWorker }}@github.com/${{ github.repository_owner }}/${REPO_NAME}.git"
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/${REPO_NAME}.git"
 
-          cd "$OUTPUT_DIR"
-          git init -b main  # Key fix here
+          echo "Pushing code to $REPO_NAME"
+          cd "$OUTPUT_DIR" || exit 1
+          git init -b main
           git remote add origin "$REPO_URL"
           git add .
-          git commit -m "Mirrored website from ${{ github.event.inputs.websiteUrl }}"
-          git push -u origin main
+          # Handle cases where httrack might not download anything or only empty files
+          if ! git diff --staged --quiet; then
+            git commit -m "Initial mirror of ${{ github.event.inputs.websiteUrl }}"
+            # Retry push a couple of times in case of temporary network issues
+            if ! git push -u origin main; then
+                sleep 5
+                if ! git push -u origin main; then
+                    echo "Failed to push code to GitHub repository after retry."
+                    echo "status=failure" >> $GITHUB_OUTPUT
+                    echo "error_message=Failed to push code to the GitHub repository." >> $GITHUB_OUTPUT
+                    exit 1
+                fi
+            fi
+          else
+            echo "No changes detected to commit."
+            # Decide if this is a failure or success with empty site
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "error_message=HTTrack downloaded an empty site or failed to find content." >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "status=running_push_code" >> $GITHUB_OUTPUT
 
+      - name: Deploy to Cloudflare Pages
+        id: deploy_pages
+        # Only run if previous steps succeeded
+        if: steps.status_init.outputs.status != 'failure' && steps.push_code.outcome == 'success'
+        run: |
+          REPO_NAME="${{ steps.create_repo.outputs.repo_name }}"
+          PROJECT_NAME="${REPO_NAME}" # Use repo name for CF Pages project name
+          REPO_URL="https://github.com/${{ github.repository_owner }}/${REPO_NAME}"
+
+          echo "Deploying $REPO_NAME to Cloudflare Pages as $PROJECT_NAME"
+          # Run wrangler pages deploy and capture output (including stderr)
+          DEPLOY_OUTPUT=$(wrangler pages deploy "$REPO_URL" --project-name="$PROJECT_NAME" --branch="main" 2>&1)
+          echo "$DEPLOY_OUTPUT" # Log output for debugging
+
+          # Extract the deployment URL (adjust grep/sed if output format changes)
+          PREVIEW_URL=$(echo "$DEPLOY_OUTPUT" | grep -o 'https://.*\.pages\.dev')
+
+          if [ -z "$PREVIEW_URL" ]; then
+             echo "Failed to deploy to Cloudflare Pages or extract URL."
+             echo "$DEPLOY_OUTPUT" # Print error output
+             echo "status=failure" >> $GITHUB_OUTPUT
+             echo "error_message=Failed to deploy to Cloudflare Pages." >> $GITHUB_OUTPUT
+             exit 1
+          fi
+
+          echo "Deployment successful: $PREVIEW_URL"
+          echo "preview_url=$PREVIEW_URL" >> $GITHUB_OUTPUT
+          echo "status=success" >> $GITHUB_OUTPUT # Mark success only after successful deployment
+
+      # This step consolidates the final status for the callback
+      - name: Set Final Status
+        id: final_status
+        # Always runs, uses outputs from previous steps or failure flags
+        run: |
+          # Check the outcome of the deploy step first
+          if [ "${{ steps.deploy_pages.outputs.status }}" == "success" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "preview_url=${{ steps.deploy_pages.outputs.preview_url }}" >> $GITHUB_OUTPUT
+            echo "error_message=''" >> $GITHUB_OUTPUT
+          # Check outcomes of critical preceding steps if deploy didn't run/succeed
+          elif [ "${{ steps.httrack_clone.outcome }}" != "success" ]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "preview_url=''" >> $GITHUB_OUTPUT
+            echo "error_message=HTTrack failed to clone the site." >> $GITHUB_OUTPUT
+          elif [ "${{ steps.create_repo.outcome }}" != "success" ]; then
+             echo "status=failure" >> $GITHUB_OUTPUT
+             echo "preview_url=''" >> $GITHUB_OUTPUT
+             echo "error_message=Failed to create GitHub repository." >> $GITHUB_OUTPUT
+          elif [ "${{ steps.push_code.outcome }}" != "success" ]; then
+             echo "status=failure" >> $GITHUB_OUTPUT
+             echo "preview_url=''" >> $GITHUB_OUTPUT
+             echo "error_message=Failed to push code to GitHub." >> $GITHUB_OUTPUT
+          elif [ "${{ steps.deploy_pages.outcome }}" != "success" ]; then
+             echo "status=failure" >> $GITHUB_OUTPUT
+             echo "preview_url=''" >> $GITHUB_OUTPUT
+             echo "error_message=Failed to deploy to Cloudflare Pages." >> $GITHUB_OUTPUT
+          # Default fallback failure
+          else
+             echo "status=failure" >> $GITHUB_OUTPUT
+             echo "preview_url=''" >> $GITHUB_OUTPUT
+             echo "error_message=An unknown error occurred during the workflow." >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Callback to Cloudflare Worker
+        # Always run this step to report status
+        if: always()
+        env:
+          CALLBACK_URL: ${{ secrets.CLOUDFLARE_WORKER_CALLBACK_URL }}
+          USER_EMAIL: ${{ github.event.inputs.email }}
+          WEBSITE_URL: ${{ github.event.inputs.websiteUrl }}
+          STATUS: ${{ steps.final_status.outputs.status }}
+          PREVIEW_URL: ${{ steps.final_status.outputs.preview_url }}
+          ERROR_MSG: ${{ steps.final_status.outputs.error_message }}
+        run: |
+          echo "Sending callback to $CALLBACK_URL"
+          echo "Status: $STATUS"
+          echo "Preview URL: $PREVIEW_URL"
+          echo "Error: $ERROR_MSG"
+
+          # Construct JSON payload using jq for safety
+          JSON_PAYLOAD=$(jq -n \
+            --arg status "$STATUS" \
+            --arg email "$USER_EMAIL" \
+            --arg website "$WEBSITE_URL" \
+            --arg url "$PREVIEW_URL" \
+            --arg error "$ERROR_MSG" \
+            '{status: $status, userEmail: $email, websiteUrl: $website, previewUrl: $url, errorMessage: $error}')
+
+          # Send POST request
+          curl -X POST "$CALLBACK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$JSON_PAYLOAD" \
+            --fail --silent --show-error # Make curl fail on HTTP errors and show them
