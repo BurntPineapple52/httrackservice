@@ -50,6 +50,36 @@ jobs:
           npm --version
           echo "status=running_install" >> $GITHUB_OUTPUT
 
+      - name: Install Wrangler CLI
+        id: install_wrangler
+        run: |
+          echo "Installing Wrangler globally..."
+          if ! npm install -g wrangler; then
+            echo "::error:: Failed to install Wrangler globally."
+            exit 1
+          fi
+          echo "Wrangler installed globally. Verifying installation..."
+          # Verify wrangler is executable immediately after install
+          if ! wrangler --version; then
+             echo "::error:: Wrangler command not found or not executable immediately after global install."
+             # Attempt to find and add npm global bin path
+             NPM_GLOBAL_BIN=$(npm bin -g)
+             if [ -d "$NPM_GLOBAL_BIN" ]; then
+               echo "Adding $NPM_GLOBAL_BIN to PATH"
+               echo "$NPM_GLOBAL_BIN" >> $GITHUB_PATH
+               # Re-verify after adding to PATH
+               if ! wrangler --version; then
+                 echo "::error:: Wrangler still not found after adding $NPM_GLOBAL_BIN to PATH."
+                 exit 1
+               fi
+             else
+               echo "::error:: Could not determine npm global bin path."
+               exit 1
+             fi
+          fi
+          echo "Wrangler installation verified."
+          echo "status=running_wrangler_install" >> $GITHUB_OUTPUT
+
       - name: Configure git
         id: configure_git
         run: |
