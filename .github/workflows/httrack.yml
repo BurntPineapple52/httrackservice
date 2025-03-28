@@ -219,7 +219,7 @@ jobs:
           echo "preview_url=$PREVIEW_URL" >> $GITHUB_OUTPUT
           echo "status=success" >> $GITHUB_OUTPUT
            
-           # This step consolidates the final status for the callback
+        # This step consolidates the final status for the callback
       - name: Set Final Status
         id: final_status
         # Always runs, uses outputs from previous steps or failure flags
