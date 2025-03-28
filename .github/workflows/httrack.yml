@@ -69,7 +69,7 @@ jobs:
           echo "Cloning ${{ github.event.inputs.websiteUrl }} into $OUTPUT_DIR"
           httrack "${{ github.event.inputs.websiteUrl }}" \
             -O "$OUTPUT_DIR" \
-            --depth=2 \
+            --depth=1 \
             --stay-on-same-address \
             --user-agent "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
             --disable-security-limits \
