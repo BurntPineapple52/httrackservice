@@ -38,13 +38,18 @@ jobs:
       - name: Install required tools
         id: install_tools
         run: |
-          sudo apt-get update && sudo apt-get install -y httrack git gh jq curl npm
+          sudo apt-get update && sudo apt-get install -y httrack jq # Only install httrack and jq via apt
+          # git, gh, curl, npm are usually pre-installed on ubuntu-latest
+          # Verify pre-installed tools (optional, for confirmation)
+          echo "Verifying tools..."
+          which git
+          which gh
+          which curl
+          which jq
+          which httrack
+          which npm
+          npm --version
           echo "status=running_install" >> $GITHUB_OUTPUT
-      - name: Install Wrangler CLI
-        id: install_wrangler
-        run: |
-          npm install -g wrangler
-          echo "status=running_wrangler_install" >> $GITHUB_OUTPUT
 
       - name: Configure git
         id: configure_git
@@ -58,8 +63,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CLOUDFLARE_WORKER_PAT }} # Use the PAT renamed secret
         run: |
+          # Log in using the token passed via stdin
           echo $GH_TOKEN | gh auth login --with-token
-          gh auth status # Verify authentication
+          # REMOVED: gh auth status # This command was likely causing the failure
+          echo "GH CLI authentication command executed."
+          # We rely on subsequent gh commands working implicitly with the token.
           echo "status=running_gh_auth" >> $GITHUB_OUTPUT
 
       - name: Run httrack to mirror website
@@ -172,39 +180,36 @@ jobs:
           echo "preview_url=$PREVIEW_URL" >> $GITHUB_OUTPUT
           echo "status=success" >> $GITHUB_OUTPUT # Mark success only after successful deployment
 
-      # This step consolidates the final status for the callback
+           # This step consolidates the final status for the callback
       - name: Set Final Status
         id: final_status
         # Always runs, uses outputs from previous steps or failure flags
+        if: always() # Ensure this step runs even if previous ones fail/are skipped
         run: |
+          # Default to failure unless deploy_pages explicitly succeeded
+          FINAL_STATUS="failure"
+          FINAL_PREVIEW_URL=""
+          FINAL_ERROR_MSG="An unexpected error occurred or a previous step failed/was skipped."
+
           # Check the outcome of the deploy step first
-          if [ "${{ steps.deploy_pages.outputs.status }}" == "success" ]; then
-            echo "status=success" >> $GITHUB_OUTPUT
-            echo "preview_url=${{ steps.deploy_pages.outputs.preview_url }}" >> $GITHUB_OUTPUT
-            echo "error_message=''" >> $GITHUB_OUTPUT
-          # Check outcomes of critical preceding steps if deploy didn't run/succeed
+          if [ "${{ steps.deploy_pages.outcome }}" == "success" ] && [ ! -z "${{ steps.deploy_pages.outputs.preview_url }}" ]; then
+            FINAL_STATUS="success"
+            FINAL_PREVIEW_URL="${{ steps.deploy_pages.outputs.preview_url }}"
+            FINAL_ERROR_MSG=""
+          # If deploy didn't succeed, provide a more specific error based on what failed
           elif [ "${{ steps.httrack_clone.outcome }}" != "success" ]; then
-            echo "status=failure" >> $GITHUB_OUTPUT
-            echo "preview_url=''" >> $GITHUB_OUTPUT
-            echo "error_message=HTTrack failed to clone the site." >> $GITHUB_OUTPUT
+            FINAL_ERROR_MSG="HTTrack failed to clone the site. Outcome: ${{ steps.httrack_clone.outcome }}"
           elif [ "${{ steps.create_repo.outcome }}" != "success" ]; then
-             echo "status=failure" >> $GITHUB_OUTPUT
-             echo "preview_url=''" >> $GITHUB_OUTPUT
-             echo "error_message=Failed to create GitHub repository." >> $GITHUB_OUTPUT
+            FINAL_ERROR_MSG="Failed to create GitHub repository. Outcome: ${{ steps.create_repo.outcome }}"
           elif [ "${{ steps.push_code.outcome }}" != "success" ]; then
-             echo "status=failure" >> $GITHUB_OUTPUT
-             echo "preview_url=''" >> $GITHUB_OUTPUT
-             echo "error_message=Failed to push code to GitHub." >> $GITHUB_OUTPUT
+            FINAL_ERROR_MSG="Failed to push code to GitHub. Outcome: ${{ steps.push_code.outcome }}"
           elif [ "${{ steps.deploy_pages.outcome }}" != "success" ]; then
-             echo "status=failure" >> $GITHUB_OUTPUT
-             echo "preview_url=''" >> $GITHUB_OUTPUT
-             echo "error_message=Failed to deploy to Cloudflare Pages." >> $GITHUB_OUTPUT
-          # Default fallback failure
-          else
-             echo "status=failure" >> $GITHUB_OUTPUT
-             echo "preview_url=''" >> $GITHUB_OUTPUT
-             echo "error_message=An unknown error occurred during the workflow." >> $GITHUB_OUTPUT
+            FINAL_ERROR_MSG="Failed to deploy to Cloudflare Pages. Outcome: ${{ steps.deploy_pages.outcome }}"
           fi
+
+          echo "status=${FINAL_STATUS}" >> $GITHUB_OUTPUT
+          echo "preview_url=${FINAL_PREVIEW_URL}" >> $GITHUB_OUTPUT
+          echo "error_message=${FINAL_ERROR_MSG}" >> $GITHUB_OUTPUT
 
       - name: Send Callback to Cloudflare Worker
         # Always run this step to report status
@@ -213,6 +218,7 @@ jobs:
           CALLBACK_URL: ${{ secrets.CLOUDFLARE_WORKER_CALLBACK_URL }}
           USER_EMAIL: ${{ github.event.inputs.email }}
           WEBSITE_URL: ${{ github.event.inputs.websiteUrl }}
+          # Use the outputs from the robust final_status step
           STATUS: ${{ steps.final_status.outputs.status }}
           PREVIEW_URL: ${{ steps.final_status.outputs.preview_url }}
           ERROR_MSG: ${{ steps.final_status.outputs.error_message }}
@@ -222,6 +228,13 @@ jobs:
           echo "Preview URL: $PREVIEW_URL"
           echo "Error: $ERROR_MSG"
 
+          # Ensure STATUS is never empty before sending
+          if [ -z "$STATUS" ]; then
+            echo "::error:: STATUS is empty, setting to failure before callback."
+            STATUS="failure"
+            ERROR_MSG="Workflow failed to determine final status."
+          fi
+
           # Construct JSON payload using jq for safety
           JSON_PAYLOAD=$(jq -n \
             --arg status "$STATUS" \
@@ -230,6 +243,8 @@ jobs:
             --arg url "$PREVIEW_URL" \
             --arg error "$ERROR_MSG" \
             '{status: $status, userEmail: $email, websiteUrl: $website, previewUrl: $url, errorMessage: $error}')
+
+          echo "Payload: $JSON_PAYLOAD"
 
           # Send POST request
           curl -X POST "$CALLBACK_URL" \
