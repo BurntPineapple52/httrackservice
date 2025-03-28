@@ -12,10 +12,8 @@ on:
         required: true
         type: string
 
-# Permissions: Only need contents: write for creating/pushing repo.
-# Wrangler uses its own Cloudflare token for deployment.
 permissions:
-  contents: write # Allows creating repos and pushing code via PAT
+  contents: write
 
 jobs:
   clone_deploy_callback:
@@ -24,9 +22,10 @@ jobs:
       status: ${{ steps.final_status.outputs.status }}
       preview_url: ${{ steps.final_status.outputs.preview_url }}
       error_message: ${{ steps.final_status.outputs.error_message }}
-    env: # Make Cloudflare credentials available to steps
+    env: # <-- DEFINE ENV VARS AT JOB LEVEL
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      GH_TOKEN: ${{ secrets.CLOUDFLARE_WORKER_PAT }} # Make PAT available to all steps in the job
     steps:
       - name: Initialize Status
         id: status_init
@@ -60,15 +59,10 @@ jobs:
 
       - name: Verify GitHub CLI Authentication (Implicit via GH_TOKEN)
         id: authenticate_gh
-        env:
-          # Ensure GH_TOKEN is set for gh commands in this step
-          GH_TOKEN: ${{ secrets.CLOUDFLARE_WORKER_PAT }}
+        # No need for 'env:' block here anymore, it inherits from the job level
         run: |
           echo "Verifying GH CLI authentication using GH_TOKEN env var..."
-          # Run a command that requires authentication to check if it works
-          gh auth status
-          # Or, more specific check:
-          # gh api user
+          gh auth status # This should now work using the job-level GH_TOKEN
           echo "GH CLI authentication appears successful."
           echo "status=running_gh_auth" >> $GITHUB_OUTPUT
 
@@ -98,14 +92,14 @@ jobs:
 
       - name: Create new GitHub repository
         id: create_repo
-        # Only run if httrack succeeded
-        if: steps.status_init.outputs.status != 'failure' && steps.httrack_clone.outcome == 'success'
+        if: steps.authenticate_gh.outcome == 'success' && steps.httrack_clone.outcome == 'success' # Added auth check
+        # No need for 'env:' block here anymore (except for step-specific vars like GH_REPO_NAME)
         env:
           GH_REPO_NAME: "migrated-${{ github.run_id }}" # Unique repo name
           GH_REPO_DESCRIPTION: "Migrated site for ${{ github.event.inputs.websiteUrl }}"
         run: |
           echo "Creating repository ${{ github.repository_owner }}/${GH_REPO_NAME}"
-          # Use gh cli to create repo
+          # gh command will implicitly use the job-level GH_TOKEN
           if ! gh repo create "${{ github.repository_owner }}/${GH_REPO_NAME}" --public --description "$GH_REPO_DESCRIPTION" --clone=false; then
              echo "Failed to create GitHub repository."
              echo "status=failure" >> $GITHUB_OUTPUT
@@ -117,24 +111,21 @@ jobs:
 
       - name: Initialize repository and push mirror
         id: push_code
-        # Only run if previous steps succeeded
-        if: steps.status_init.outputs.status != 'failure' && steps.create_repo.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ secrets.CLOUDFLARE_WORKER_PAT }}
+        if: steps.create_repo.outcome == 'success'
+        # No need for explicit GH_TOKEN in 'env:' here
         run: |
           REPO_NAME="${{ steps.create_repo.outputs.repo_name }}"
           OUTPUT_DIR="${{ steps.httrack_clone.outputs.output_dir }}"
-          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository_owner }}/${REPO_NAME}.git"
+          # Use the job-level GH_TOKEN for the repo URL
+          REPO_URL="https://x-access-token:${{ env.GH_TOKEN }}@github.com/${{ github.repository_owner }}/${REPO_NAME}.git"
 
           echo "Pushing code to $REPO_NAME"
           cd "$OUTPUT_DIR" || exit 1
           git init -b main
           git remote add origin "$REPO_URL"
           git add .
-          # Handle cases where httrack might not download anything or only empty files
           if ! git diff --staged --quiet; then
             git commit -m "Initial mirror of ${{ github.event.inputs.websiteUrl }}"
-            # Retry push a couple of times in case of temporary network issues
             if ! git push -u origin main; then
                 sleep 5
                 if ! git push -u origin main; then
@@ -146,7 +137,6 @@ jobs:
             fi
           else
             echo "No changes detected to commit."
-            # Decide if this is a failure or success with empty site
             echo "status=failure" >> $GITHUB_OUTPUT
             echo "error_message=HTTrack downloaded an empty site or failed to find content." >> $GITHUB_OUTPUT
             exit 1
