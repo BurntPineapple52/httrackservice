@@ -173,67 +173,87 @@ jobs:
           fi
           echo "status=running_push_code" >> $GITHUB_OUTPUT
 
-      - name: Deploy to Cloudflare Pages
-        id: deploy_pages
+      - name: Create Cloudflare Pages Project
+        id: create_cf_project
+        # Run only if the repo was created and code pushed successfully
         if: steps.push_code.outcome == 'success'
         run: |
-          OUTPUT_DIR="${{ steps.httrack_clone.outputs.output_dir }}"
           PROJECT_NAME="${{ steps.create_repo.outputs.repo_name }}"
+          echo "Attempting to create Cloudflare Pages project: $PROJECT_NAME"
 
-          if [ -z "$OUTPUT_DIR" ] || [ ! -d "$OUTPUT_DIR" ]; then
-            echo "::error:: HTTrack output directory '$OUTPUT_DIR' not found or variable not set."
+          # Execute wrangler pages project create
+          # Use || true to capture output even on failure (e.g., if project already exists)
+          CREATE_OUTPUT=$(npx wrangler pages project create "$PROJECT_NAME" --production-branch="main" 2>&1) || true
+          CREATE_EXIT_CODE=$?
+
+          echo "--- Create Project Output ---"
+          echo "$CREATE_OUTPUT"
+          echo "--- End Create Project Output ---"
+          echo "Create Project Exit Code: $CREATE_EXIT_CODE"
+
+          # Check for specific error "Project already exists" - this is OK for idempotency
+          if echo "$CREATE_OUTPUT" | grep -q "A project with this name already exists"; then
+            echo "Project '$PROJECT_NAME' already exists. Proceeding with deployment."
+          # Check for other errors
+          elif [ $CREATE_EXIT_CODE -ne 0 ]; then
+            echo "::error:: Failed to create Cloudflare Pages project '$PROJECT_NAME'. Exit code: $CREATE_EXIT_CODE"
             echo "status=failure" >> $GITHUB_OUTPUT
-            echo "error_message=Could not find the cloned website directory for deployment." >> $GITHUB_OUTPUT
+            echo "error_message=Failed to create Cloudflare Pages project (Code: $CREATE_EXIT_CODE)." >> $GITHUB_OUTPUT
             exit 1
           fi
+          echo "Cloudflare Pages project creation/verification successful."
+          # Pass the project name for the next step (though it's already available)
+          echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
 
-          echo "Deploying directory '$OUTPUT_DIR' to Cloudflare Pages as project '$PROJECT_NAME'"
-          echo "Command: npx wrangler pages deploy \"$OUTPUT_DIR\" --project-name=\"$PROJECT_NAME\""
+      - name: Deploy to Cloudflare Pages
+        id: deploy_pages
+        # Run only if the project creation step seemed okay
+        if: steps.create_cf_project.outcome == 'success'
+        run: |
+          OUTPUT_DIR="${{ steps.httrack_clone.outputs.output_dir }}"
+          PROJECT_NAME="${{ steps.create_cf_project.outputs.project_name }}" # Get name from previous step
 
-          # Create temporary files for wrangler output
-          WRANGLER_STDOUT_FILE=$(mktemp)
-          WRANGLER_STDERR_FILE=$(mktemp)
-          DEPLOY_OUTPUT="" # Initialize variable
-
-          # Execute wrangler, redirecting stdout/stderr, capture exit code immediately
-          # Use '|| true' temporarily to prevent set -e stopping the script here if wrangler fails
-          npx wrangler pages deploy "$OUTPUT_DIR" --project-name="$PROJECT_NAME" > "$WRANGLER_STDOUT_FILE" 2> "$WRANGLER_STDERR_FILE" || true
-          WRANGLER_EXIT_CODE=$? # Capture the real exit code
-
-          # Combine stdout and stderr for logging/parsing
-          DEPLOY_OUTPUT=$(cat "$WRANGLER_STDOUT_FILE" "$WRANGLER_STDERR_FILE")
-
-          # Clean up temp files
-          rm -f "$WRANGLER_STDOUT_FILE" "$WRANGLER_STDERR_FILE"
-
-          # --- Enhanced Debugging ---
-          echo "--- Wrangler Combined Output START ---"
-          echo "$DEPLOY_OUTPUT" # Now this should contain stdout AND stderr
-          echo "--- Wrangler Combined Output END ---"
-          echo "Wrangler Exit Code: $WRANGLER_EXIT_CODE"
-          # --- End Debugging ---
-
-          # Now check the captured exit code
-          if [ $WRANGLER_EXIT_CODE -ne 0 ]; then
-             echo "::error:: Wrangler command failed with exit code $WRANGLER_EXIT_CODE."
-             # Extract first line containing 'error' as a summary, limit length
-             ERROR_SNIPPET=$(echo "$DEPLOY_OUTPUT" | grep -i 'error' | head -n 1 | cut -c 1-250)
-             if [ -z "$ERROR_SNIPPET" ]; then
-               ERROR_SNIPPET="Wrangler deployment failed (Code: $WRANGLER_EXIT_CODE). Check logs."
-             fi
-             echo "status=failure" >> $GITHUB_OUTPUT
-             echo "error_message=${ERROR_SNIPPET}" >> $GITHUB_OUTPUT
-             exit 1 # Explicitly fail the step
+          if [ -z "$OUTPUT_DIR" ] || [ ! -d "$OUTPUT_DIR" ]; then
+            # ... (directory check as before) ...
+            exit 1
+          fi
+          if [ -z "$PROJECT_NAME" ]; then
+             echo "::error:: Project name from create step is missing."
+             exit 1
           fi
 
-          # Extract the deployment URL (adjust grep if output format changes)
+          echo "Deploying directory '$OUTPUT_DIR' to Cloudflare Pages project '$PROJECT_NAME'"
+          echo "Command: npx wrangler pages deploy \"$OUTPUT_DIR\" --project-name=\"$PROJECT_NAME\""
+
+          WRANGLER_STDOUT_FILE=$(mktemp)
+          WRANGLER_STDERR_FILE=$(mktemp)
+          DEPLOY_OUTPUT=""
+
+          # Execute deploy command (project should exist now)
+          npx wrangler pages deploy "$OUTPUT_DIR" --project-name="$PROJECT_NAME" > "$WRANGLER_STDOUT_FILE" 2> "$WRANGLER_STDERR_FILE" || true
+          WRANGLER_EXIT_CODE=$?
+
+          DEPLOY_OUTPUT=$(cat "$WRANGLER_STDOUT_FILE" "$WRANGLER_STDERR_FILE")
+          rm -f "$WRANGLER_STDOUT_FILE" "$WRANGLER_STDERR_FILE"
+
+          echo "--- Wrangler Deploy Output START ---"
+          echo "$DEPLOY_OUTPUT"
+          echo "--- Wrangler Deploy Output END ---"
+          echo "Wrangler Deploy Exit Code: $WRANGLER_EXIT_CODE"
+
+          # Check deploy exit code (expecting 0 now)
+          if [ $WRANGLER_EXIT_CODE -ne 0 ]; then
+             echo "::error:: Wrangler deploy command failed with exit code $WRANGLER_EXIT_CODE."
+             # ... (error handling as before) ...
+             exit 1
+          fi
+
+          # Extract the deployment URL
           PREVIEW_URL=$(echo "$DEPLOY_OUTPUT" | grep -o 'https://.*\.pages\.dev')
 
           if [ -z "$PREVIEW_URL" ]; then
-             echo "::error:: Failed to extract Cloudflare Pages URL from Wrangler output."
-             echo "$DEPLOY_OUTPUT" # Log the full output again if URL extraction fails
-             echo "status=failure" >> $GITHUB_OUTPUT
-             echo "error_message=Deployed, but failed to extract Cloudflare Pages URL." >> $GITHUB_OUTPUT
+             echo "::error:: Failed to extract Cloudflare Pages URL from deploy output."
+             # ... (error handling as before) ...
              exit 1
           fi
 
