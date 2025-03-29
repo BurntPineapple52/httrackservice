@@ -104,11 +104,10 @@ jobs:
           httrack "${{ github.event.inputs.websiteUrl }}" \
             -O "$OUTPUT_DIR" \
             --depth=1 \
-            --stay-on-same-address \
+            --mirror
             --user-agent "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
             --disable-security-limits \
             --robots=0 \
-            --verbose \
             +*.png +*.gif +*.jpg +*.jpeg +*.svg +*.css +*.js # Common file types
           # Basic check if httrack created the directory and index file
           if [ ! -d "$OUTPUT_DIR" ] || [ ! -f "$OUTPUT_DIR/index.html" ]; then
