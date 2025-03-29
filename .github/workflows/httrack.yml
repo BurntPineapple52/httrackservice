@@ -175,15 +175,11 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         id: deploy_pages
-        # Run only if code was successfully pushed to the repo
         if: steps.push_code.outcome == 'success'
         run: |
-          # Get the directory where httrack cloned the site
           OUTPUT_DIR="${{ steps.httrack_clone.outputs.output_dir }}"
-          # Use the repo name for the Cloudflare project name for consistency
           PROJECT_NAME="${{ steps.create_repo.outputs.repo_name }}"
 
-          # Check if OUTPUT_DIR variable is set and directory exists
           if [ -z "$OUTPUT_DIR" ] || [ ! -d "$OUTPUT_DIR" ]; then
             echo "::error:: HTTrack output directory '$OUTPUT_DIR' not found or variable not set."
             echo "status=failure" >> $GITHUB_OUTPUT
@@ -194,35 +190,50 @@ jobs:
           echo "Deploying directory '$OUTPUT_DIR' to Cloudflare Pages as project '$PROJECT_NAME'"
           echo "Command: npx wrangler pages deploy \"$OUTPUT_DIR\" --project-name=\"$PROJECT_NAME\""
 
-          # Run wrangler pages deploy on the DIRECTORY and capture output
-          # REMOVED --repo and --branch flags
-          DEPLOY_OUTPUT=$(npx wrangler pages deploy "$OUTPUT_DIR" --project-name="$PROJECT_NAME" 2>&1)
-          WRANGLER_EXIT_CODE=$? # Capture exit code
+          # Create temporary files for wrangler output
+          WRANGLER_STDOUT_FILE=$(mktemp)
+          WRANGLER_STDERR_FILE=$(mktemp)
+          DEPLOY_OUTPUT="" # Initialize variable
 
-          # --- START DEBUGGING ---
-          echo "--- Wrangler Raw Output START ---"
-          echo "$DEPLOY_OUTPUT"
-          echo "--- Wrangler Raw Output END ---"
+          # Execute wrangler, redirecting stdout/stderr, capture exit code immediately
+          # Use '|| true' temporarily to prevent set -e stopping the script here if wrangler fails
+          npx wrangler pages deploy "$OUTPUT_DIR" --project-name="$PROJECT_NAME" > "$WRANGLER_STDOUT_FILE" 2> "$WRANGLER_STDERR_FILE" || true
+          WRANGLER_EXIT_CODE=$? # Capture the real exit code
+
+          # Combine stdout and stderr for logging/parsing
+          DEPLOY_OUTPUT=$(cat "$WRANGLER_STDOUT_FILE" "$WRANGLER_STDERR_FILE")
+
+          # Clean up temp files
+          rm -f "$WRANGLER_STDOUT_FILE" "$WRANGLER_STDERR_FILE"
+
+          # --- Enhanced Debugging ---
+          echo "--- Wrangler Combined Output START ---"
+          echo "$DEPLOY_OUTPUT" # Now this should contain stdout AND stderr
+          echo "--- Wrangler Combined Output END ---"
           echo "Wrangler Exit Code: $WRANGLER_EXIT_CODE"
-          # --- END DEBUGGING ---
+          # --- End Debugging ---
 
-          # Check wrangler exit status explicitly
+          # Now check the captured exit code
           if [ $WRANGLER_EXIT_CODE -ne 0 ]; then
              echo "::error:: Wrangler command failed with exit code $WRANGLER_EXIT_CODE."
+             # Extract first line containing 'error' as a summary, limit length
+             ERROR_SNIPPET=$(echo "$DEPLOY_OUTPUT" | grep -i 'error' | head -n 1 | cut -c 1-250)
+             if [ -z "$ERROR_SNIPPET" ]; then
+               ERROR_SNIPPET="Wrangler deployment failed (Code: $WRANGLER_EXIT_CODE). Check logs."
+             fi
              echo "status=failure" >> $GITHUB_OUTPUT
-             echo "error_message=Wrangler deployment command failed (Code: $WRANGLER_EXIT_CODE)." >> $GITHUB_OUTPUT
+             echo "error_message=${ERROR_SNIPPET}" >> $GITHUB_OUTPUT
              exit 1 # Explicitly fail the step
           fi
 
           # Extract the deployment URL (adjust grep if output format changes)
-          # The URL format might be slightly different for direct directory uploads vs Git
-          # This grep should still work for the *.pages.dev URL
           PREVIEW_URL=$(echo "$DEPLOY_OUTPUT" | grep -o 'https://.*\.pages\.dev')
 
           if [ -z "$PREVIEW_URL" ]; then
              echo "::error:: Failed to extract Cloudflare Pages URL from Wrangler output."
+             echo "$DEPLOY_OUTPUT" # Log the full output again if URL extraction fails
              echo "status=failure" >> $GITHUB_OUTPUT
-             echo "error_message=Failed to deploy or extract Cloudflare Pages URL." >> $GITHUB_OUTPUT
+             echo "error_message=Deployed, but failed to extract Cloudflare Pages URL." >> $GITHUB_OUTPUT
              exit 1
           fi
 
