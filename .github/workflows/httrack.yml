@@ -205,90 +205,58 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         id: deploy_pages
-        # Run only if the project creation step seemed okay
         if: steps.create_cf_project.outcome == 'success'
         run: |
           OUTPUT_DIR="${{ steps.httrack_clone.outputs.output_dir }}"
-          PROJECT_NAME="${{ steps.create_cf_project.outputs.project_name }}" # Get name from previous step
-
+          PROJECT_NAME="${{ steps.create_cf_project.outputs.project_name }}"
+      
           if [ -z "$OUTPUT_DIR" ] || [ ! -d "$OUTPUT_DIR" ]; then
-            # ... (directory check as before) ...
+            echo "::error:: Output directory '$OUTPUT_DIR' is missing or invalid."
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "error_message=HTTrack output directory is missing." >> $GITHUB_OUTPUT
             exit 1
           fi
-          if [ -z "$PROJECT_NAME" ]; then
-             echo "::error:: Project name from create step is missing."
-             exit 1
+      
+          # Find the actual website content directory (HTTrack often nests it)
+          DEPLOY_DIR=$(find "$OUTPUT_DIR" -name index.html -printf '%h\n' | head -n 1)
+          if [ -z "$DEPLOY_DIR" ]; then
+            DEPLOY_DIR="$OUTPUT_DIR"  # Fallback to root if index.html not found
           fi
-
-          echo "Deploying directory '$OUTPUT_DIR' to Cloudflare Pages project '$PROJECT_NAME'"
-          echo "Command: npx wrangler pages deploy \"$OUTPUT_DIR\" --project-name=\"$PROJECT_NAME\""
-
+      
+          echo "Deploying from directory: $DEPLOY_DIR"
+          ls -la "$DEPLOY_DIR"
+      
           WRANGLER_STDOUT_FILE=$(mktemp)
           WRANGLER_STDERR_FILE=$(mktemp)
-          DEPLOY_OUTPUT=""
-
-          # Execute deploy command (project should exist now)
-          npx wrangler pages deploy "$OUTPUT_DIR" --project-name="$PROJECT_NAME" > "$WRANGLER_STDOUT_FILE" 2> "$WRANGLER_STDERR_FILE" || true
+          
+          npx wrangler pages deploy "$DEPLOY_DIR" --project-name="$PROJECT_NAME" > "$WRANGLER_STDOUT_FILE" 2> "$WRANGLER_STDERR_FILE" || true
           WRANGLER_EXIT_CODE=$?
-
+      
           DEPLOY_OUTPUT=$(cat "$WRANGLER_STDOUT_FILE" "$WRANGLER_STDERR_FILE")
           rm -f "$WRANGLER_STDOUT_FILE" "$WRANGLER_STDERR_FILE"
-
-          echo "--- Wrangler Deploy Output START ---"
+      
+          echo "--- Wrangler Deploy Output ---"
           echo "$DEPLOY_OUTPUT"
-          echo "--- Wrangler Deploy Output END ---"
           echo "Wrangler Deploy Exit Code: $WRANGLER_EXIT_CODE"
-
-          # Check deploy exit code (expecting 0 now)
+      
           if [ $WRANGLER_EXIT_CODE -ne 0 ]; then
-             echo "::error:: Wrangler deploy command failed with exit code $WRANGLER_EXIT_CODE."
-             # ... (error handling as before) ...
-             exit 1
+            echo "::error:: Wrangler deploy command failed with exit code $WRANGLER_EXIT_CODE."
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "error_message=Failed to deploy to Cloudflare Pages (Code: $WRANGLER_EXIT_CODE)." >> $GITHUB_OUTPUT
+            exit 1
           fi
-
-          # Extract the deployment URL
+      
           PREVIEW_URL=$(echo "$DEPLOY_OUTPUT" | grep -o 'https://.*\.pages\.dev')
-
           if [ -z "$PREVIEW_URL" ]; then
-             echo "::error:: Failed to extract Cloudflare Pages URL from deploy output."
-             # ... (error handling as before) ...
-             exit 1
+            echo "::error:: Failed to extract Cloudflare Pages URL from deploy output."
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "error_message=Deployment succeeded but failed to extract preview URL." >> $GITHUB_OUTPUT
+            exit 1
           fi
-
+      
           echo "Deployment successful: $PREVIEW_URL"
           echo "preview_url=$PREVIEW_URL" >> $GITHUB_OUTPUT
           echo "status=success" >> $GITHUB_OUTPUT
-           
-        # This step consolidates the final status for the callback
-      - name: Set Final Status
-        id: final_status
-        # Always runs, uses outputs from previous steps or failure flags
-        if: always() # Ensure this step runs even if previous ones fail/are skipped
-        run: |
-          # Default to failure unless deploy_pages explicitly succeeded
-          FINAL_STATUS="failure"
-          FINAL_PREVIEW_URL=""
-          FINAL_ERROR_MSG="An unexpected error occurred or a previous step failed/was skipped."
-
-          # Check the outcome of the deploy step first
-          if [ "${{ steps.deploy_pages.outcome }}" == "success" ] && [ ! -z "${{ steps.deploy_pages.outputs.preview_url }}" ]; then
-            FINAL_STATUS="success"
-            FINAL_PREVIEW_URL="${{ steps.deploy_pages.outputs.preview_url }}"
-            FINAL_ERROR_MSG=""
-          # If deploy didn't succeed, provide a more specific error based on what failed
-          elif [ "${{ steps.httrack_clone.outcome }}" != "success" ]; then
-            FINAL_ERROR_MSG="HTTrack failed to clone the site. Outcome: ${{ steps.httrack_clone.outcome }}"
-          elif [ "${{ steps.create_repo.outcome }}" != "success" ]; then
-            FINAL_ERROR_MSG="Failed to create GitHub repository. Outcome: ${{ steps.create_repo.outcome }}"
-          elif [ "${{ steps.push_code.outcome }}" != "success" ]; then
-            FINAL_ERROR_MSG="Failed to push code to GitHub. Outcome: ${{ steps.push_code.outcome }}"
-          elif [ "${{ steps.deploy_pages.outcome }}" != "success" ]; then
-            FINAL_ERROR_MSG="Failed to deploy to Cloudflare Pages. Outcome: ${{ steps.deploy_pages.outcome }}"
-          fi
-
-          echo "status=${FINAL_STATUS}" >> $GITHUB_OUTPUT
-          echo "preview_url=${FINAL_PREVIEW_URL}" >> $GITHUB_OUTPUT
-          echo "error_message=${FINAL_ERROR_MSG}" >> $GITHUB_OUTPUT
 
       - name: Send Callback to Cloudflare Worker
         # Always run this step to report status
