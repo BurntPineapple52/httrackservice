@@ -103,12 +103,12 @@ jobs:
           echo "Cloning ${{ github.event.inputs.websiteUrl }} into $OUTPUT_DIR"
           httrack "${{ github.event.inputs.websiteUrl }}" \
             -O "$OUTPUT_DIR" \
-            --depth=1 \
+            --depth=10 \
             --mirror \
-            --user-agent "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+            --user-agent "Mozilla/5.0" \
             --disable-security-limits \
             --robots=0 \
-            +*.png +*.gif +*.jpg +*.jpeg +*.svg +*.css +*.js # Common file types
+            +*.js
           # Basic check if httrack created the directory and index file
           if [ ! -d "$OUTPUT_DIR" ] || [ ! -f "$OUTPUT_DIR/index.html" ]; then
             echo "HTTrack failed to create output directory or index.html"
