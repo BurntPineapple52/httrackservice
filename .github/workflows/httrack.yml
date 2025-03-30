@@ -210,20 +210,23 @@ jobs:
           OUTPUT_DIR="${{ steps.httrack_clone.outputs.output_dir }}"
           PROJECT_NAME="${{ steps.create_cf_project.outputs.project_name }}"
       
-          if [ -z "$OUTPUT_DIR" ] || [ ! -d "$OUTPUT_DIR" ]; then
-            echo "::error:: Output directory '$OUTPUT_DIR' is missing or invalid."
+          # Extract domain without protocol (e.g. "www.example.com")
+          TARGET_DOMAIN=$(echo "${{ github.event.inputs.websiteUrl }}" | sed -E 's|^https?://||;s|/.*$||')
+          
+          # Find the exact HTTrack-created folder (e.g. "www.example.com")
+          DEPLOY_DIR="$OUTPUT_DIR/$TARGET_DOMAIN"
+          
+          # Verify the folder exists and contains index.html
+          if [ ! -d "$DEPLOY_DIR" ] || [ ! -f "$DEPLOY_DIR/index.html" ]; then
+            echo "::error:: Correct subfolder '$TARGET_DOMAIN' not found or missing index.html"
+            echo "Directory contents:"
+            ls -la "$OUTPUT_DIR"
             echo "status=failure" >> $GITHUB_OUTPUT
-            echo "error_message=HTTrack output directory is missing." >> $GITHUB_OUTPUT
+            echo "error_message=HTTrack did not create expected '$TARGET_DOMAIN' subfolder." >> $GITHUB_OUTPUT
             exit 1
           fi
       
-          # Find the actual website content directory (HTTrack often nests it)
-          DEPLOY_DIR=$(find "$OUTPUT_DIR" -name index.html -printf '%h\n' | head -n 1)
-          if [ -z "$DEPLOY_DIR" ]; then
-            DEPLOY_DIR="$OUTPUT_DIR"  # Fallback to root if index.html not found
-          fi
-      
-          echo "Deploying from directory: $DEPLOY_DIR"
+          echo "Deploying from verified subfolder: $DEPLOY_DIR"
           ls -la "$DEPLOY_DIR"
       
           WRANGLER_STDOUT_FILE=$(mktemp)
