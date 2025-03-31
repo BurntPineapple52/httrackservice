@@ -99,24 +99,40 @@ jobs:
       - name: Run httrack to mirror website
         id: httrack_clone
         run: |
-         OUTPUT_DIR="cloned_website_${{ github.run_id }}"
-         echo "Cloning ${{ github.event.inputs.websiteUrl }} into $OUTPUT_DIR"
-         httrack "${{ github.event.inputs.websiteUrl }}" \
-           -O "$OUTPUT_DIR" \
-           --depth=10 \
-           --user-agent "Mozilla/5.0" \
-           --disable-security-limits \
-           --robots=0 \
-           +*.js
-         # Basic check if httrack created the directory and index file
-         if [ ! -d "$OUTPUT_DIR" ] || [ ! -f "$OUTPUT_DIR/index.html" ]; then
-           echo "HTTrack failed to create output directory or index.html"
-           echo "status=failure" >> $GITHUB_OUTPUT
-           echo "error_message=HTTrack failed to clone the site properly." >> $GITHUB_OUTPUT
-           exit 1
-         fi
-         echo "output_dir=$OUTPUT_DIR" >> $GITHUB_OUTPUT
-         echo "status=running_httrack" >> $GITHUB_OUTPUT
+          OUTPUT_DIR="cloned_website_${{ github.run_id }}"
+          echo "Cloning ${{ github.event.inputs.websiteUrl }} into $OUTPUT_DIR"
+          
+          # Force HTTPS if URL starts with http://
+          URL="${{ github.event.inputs.websiteUrl }}"
+          if [[ $URL == http://* ]]; then
+            URL="https://${URL#http://}"
+            echo "Converting to HTTPS: $URL"
+          fi
+      
+          httrack "$URL" \
+            -O "$OUTPUT_DIR" \
+            -I0 \
+            --depth=10 \
+            --user-agent "Mozilla/5.0" \
+            --disable-security-limits \
+            --robots=0 \
+            -s0 \                  # Ignore robots.txt
+            -b1 \                  # Enable cookies
+            -%P \                  # Parse JavaScript links
+            --update \             # Handle SSL certificates
+            +*.js \                # Include JS files
+            +*.css \               # Include CSS files
+            +*.png +*.jpg +*.gif \ # Include images
+            +*.woff +*.woff2       # Include fonts
+               # Basic check if httrack created the directory and index file
+               if [ ! -d "$OUTPUT_DIR" ] || [ ! -f "$OUTPUT_DIR/index.html" ]; then
+                 echo "HTTrack failed to create output directory or index.html"
+                 echo "status=failure" >> $GITHUB_OUTPUT
+                 echo "error_message=HTTrack failed to clone the site properly." >> $GITHUB_OUTPUT
+                 exit 1
+               fi
+               echo "output_dir=$OUTPUT_DIR" >> $GITHUB_OUTPUT
+               echo "status=running_httrack" >> $GITHUB_OUTPUT
 
       - name: Create new GitHub repository
         id: create_repo
