@@ -117,7 +117,6 @@ jobs:
             --disable-security-limits \
             --robots=0 \
             -s0 \                  # Ignore robots.txt
-            -b1 \                  # Enable cookies
             -%P \                  # Parse JavaScript links
             --update \             # Handle SSL certificates
             +*.js \                # Include JS files
