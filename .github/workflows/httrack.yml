@@ -116,13 +116,13 @@ jobs:
             --user-agent "Mozilla/5.0" \
             --disable-security-limits \
             --robots=0 \
-            -s0 \                  # Ignore robots.txt
-            --extended-parsing \                  # Parse JavaScript links
-            --update \             # Handle SSL certificates
-            +*.js \                # Include JS files
-            +*.css \               # Include CSS files
-            +*.png +*.jpg +*.gif \ # Include images
-            +*.woff +*.woff2       # Include fonts
+            -s0 \                
+            --extended-parsing \                
+            --update \            
+            +*.js \                
+            +*.css \               
+            +*.png +*.jpg +*.gif \ 
+            +*.woff +*.woff2    
                # Basic check if httrack created the directory and index file
                if [ ! -d "$OUTPUT_DIR" ] || [ ! -f "$OUTPUT_DIR/index.html" ]; then
                  echo "HTTrack failed to create output directory or index.html"
