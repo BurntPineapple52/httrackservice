@@ -22,10 +22,11 @@ jobs:
       status: ${{ steps.final_status.outputs.status }}
       preview_url: ${{ steps.final_status.outputs.preview_url }}
       error_message: ${{ steps.final_status.outputs.error_message }}
-    env: # <-- DEFINE ENV VARS AT JOB LEVEL
+    env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      GH_TOKEN: ${{ secrets.CLOUDFLARE_WORKER_PAT }} # Make PAT available to all steps in the job
+      GH_TOKEN: ${{ secrets.CLOUDFLARE_WORKER_PAT }}
+
     steps:
       - name: Initialize Status
         id: status_init
@@ -37,9 +38,7 @@ jobs:
       - name: Install required tools
         id: install_tools
         run: |
-          sudo apt-get update && sudo apt-get install -y httrack jq # Only install httrack and jq via apt
-          # git, gh, curl, npm are usually pre-installed on ubuntu-latest
-          # Verify pre-installed tools (optional, for confirmation)
+          sudo apt-get update && sudo apt-get install -y httrack jq
           echo "Verifying tools..."
           which git
           which gh
@@ -48,67 +47,49 @@ jobs:
           which httrack
           which npm
           npm --version
-          echo "status=running_install" >> $GITHUB_OUTPUT
+
+      - name: Setup Node.js for Wrangler
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20 # or your preferred Node.js version
+          cache: 'npm'
 
       - name: Install Wrangler CLI
         id: install_wrangler
         run: |
           echo "Installing Wrangler globally..."
-          if ! npm install -g wrangler; then
-            echo "::error:: Failed to install Wrangler globally."
-            exit 1
-          fi
-          echo "Wrangler installed globally. Verifying installation..."
-          # Verify wrangler is executable immediately after install
+          npm install -g wrangler
           if ! wrangler --version; then
-             echo "::error:: Wrangler command not found or not executable immediately after global install."
-             # Attempt to find and add npm global bin path
-             NPM_GLOBAL_BIN=$(npm bin -g)
-             if [ -d "$NPM_GLOBAL_BIN" ]; then
-               echo "Adding $NPM_GLOBAL_BIN to PATH"
-               echo "$NPM_GLOBAL_BIN" >> $GITHUB_PATH
-               # Re-verify after adding to PATH
-               if ! wrangler --version; then
-                 echo "::error:: Wrangler still not found after adding $NPM_GLOBAL_BIN to PATH."
-                 exit 1
-               fi
-             else
-               echo "::error:: Could not determine npm global bin path."
-               exit 1
-             fi
+             echo "::error:: Wrangler command not found after global install."
+             exit 1
           fi
           echo "Wrangler installation verified."
-          echo "status=running_wrangler_install" >> $GITHUB_OUTPUT
 
       - name: Configure git
         id: configure_git
         run: |
           git config --global user.email "actions@github.com"
           git config --global user.name "GitHub Actions Migration Bot"
-          echo "status=running_git_config" >> $GITHUB_OUTPUT
 
-      - name: Verify GitHub CLI Authentication (Implicit via GH_TOKEN)
+      - name: Verify GitHub CLI Authentication
         id: authenticate_gh
-        # No need for 'env:' block here anymore, it inherits from the job level
         run: |
           echo "Verifying GH CLI authentication using GH_TOKEN env var..."
-          gh auth status # This should now work using the job-level GH_TOKEN
+          gh auth status
           echo "GH CLI authentication appears successful."
-          echo "status=running_gh_auth" >> $GITHUB_OUTPUT
 
       - name: Run httrack to mirror website
         id: httrack_clone
         run: |
           OUTPUT_DIR="cloned_website_${{ github.run_id }}"
           echo "Cloning ${{ github.event.inputs.websiteUrl }} into $OUTPUT_DIR"
-          
-          # Force HTTPS if URL starts with http://
+
           URL="${{ github.event.inputs.websiteUrl }}"
           if [[ $URL == http://* ]]; then
             URL="https://${URL#http://}"
             echo "Converting to HTTPS: $URL"
           fi
-      
+
           httrack "$URL" \
             -O "$OUTPUT_DIR" \
             -I0 \
@@ -116,50 +97,44 @@ jobs:
             --user-agent "Mozilla/5.0" \
             --disable-security-limits \
             --robots=0 \
-            -s0 \                
-            --extended-parsing \                
-            --update \            
-            +*.js \                
-            +*.css \               
-            +*.png +*.jpg +*.gif \ 
-            +*.woff +*.woff2    
-               # Basic check if httrack created the directory and index file
-               if [ ! -d "$OUTPUT_DIR" ] || [ ! -f "$OUTPUT_DIR/index.html" ]; then
-                 echo "HTTrack failed to create output directory or index.html"
-                 echo "status=failure" >> $GITHUB_OUTPUT
-                 echo "error_message=HTTrack failed to clone the site properly." >> $GITHUB_OUTPUT
-                 exit 1
-               fi
-               echo "output_dir=$OUTPUT_DIR" >> $GITHUB_OUTPUT
-               echo "status=running_httrack" >> $GITHUB_OUTPUT
+            -s0 \
+            --extended-parsing \
+            --update \
+            +*.js \
+            +*.css \
+            +*.png +*.jpg +*.gif \
+            +*.woff +*.woff2
+
+          if [ ! -d "$OUTPUT_DIR" ] || [ ! -f "$OUTPUT_DIR/index.html" ]; then
+            echo "::error:: HTTrack failed to create output directory or index.html"
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "error_message=HTTrack failed to clone the site properly." >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          echo "output_dir=$OUTPUT_DIR" >> $GITHUB_OUTPUT
 
       - name: Create new GitHub repository
         id: create_repo
-        if: steps.authenticate_gh.outcome == 'success' && steps.httrack_clone.outcome == 'success' # Added auth check
-        # No need for 'env:' block here anymore (except for step-specific vars like GH_REPO_NAME)
+        if: steps.authenticate_gh.outcome == 'success' && steps.httrack_clone.outcome == 'success'
         env:
-          GH_REPO_NAME: "migrated-${{ github.run_id }}" # Unique repo name
+          GH_REPO_NAME: "migrated-${{ github.run_id }}"
           GH_REPO_DESCRIPTION: "Migrated site for ${{ github.event.inputs.websiteUrl }}"
         run: |
           echo "Creating repository ${{ github.repository_owner }}/${GH_REPO_NAME}"
-          # gh command will implicitly use the job-level GH_TOKEN
           if ! gh repo create "${{ github.repository_owner }}/${GH_REPO_NAME}" --public --description "$GH_REPO_DESCRIPTION" --clone=false; then
-             echo "Failed to create GitHub repository."
+             echo "::error:: Failed to create GitHub repository."
              echo "status=failure" >> $GITHUB_OUTPUT
              echo "error_message=Failed to create the GitHub repository." >> $GITHUB_OUTPUT
              exit 1
           fi
           echo "repo_name=${GH_REPO_NAME}" >> $GITHUB_OUTPUT
-          echo "status=running_repo_create" >> $GITHUB_OUTPUT
 
       - name: Initialize repository and push mirror
         id: push_code
         if: steps.create_repo.outcome == 'success'
-        # No need for explicit GH_TOKEN in 'env:' here
         run: |
           REPO_NAME="${{ steps.create_repo.outputs.repo_name }}"
           OUTPUT_DIR="${{ steps.httrack_clone.outputs.output_dir }}"
-          # Use the job-level GH_TOKEN for the repo URL
           REPO_URL="https://x-access-token:${{ env.GH_TOKEN }}@github.com/${{ github.repository_owner }}/${REPO_NAME}.git"
 
           echo "Pushing code to $REPO_NAME"
@@ -172,30 +147,26 @@ jobs:
             if ! git push -u origin main; then
                 sleep 5
                 if ! git push -u origin main; then
-                    echo "Failed to push code to GitHub repository after retry."
+                    echo "::error:: Failed to push code to GitHub repository after retry."
                     echo "status=failure" >> $GITHUB_OUTPUT
                     echo "error_message=Failed to push code to the GitHub repository." >> $GITHUB_OUTPUT
                     exit 1
                 fi
             fi
           else
-            echo "No changes detected to commit."
+            echo "::error:: No changes detected to commit."
             echo "status=failure" >> $GITHUB_OUTPUT
             echo "error_message=HTTrack downloaded an empty site or failed to find content." >> $GITHUB_OUTPUT
             exit 1
           fi
-          echo "status=running_push_code" >> $GITHUB_OUTPUT
 
       - name: Create Cloudflare Pages Project
         id: create_cf_project
-        # Run only if the repo was created and code pushed successfully
         if: steps.push_code.outcome == 'success'
         run: |
           PROJECT_NAME="${{ steps.create_repo.outputs.repo_name }}"
           echo "Attempting to create Cloudflare Pages project: $PROJECT_NAME"
 
-          # Execute wrangler pages project create
-          # Use || true to capture output even on failure (e.g., if project already exists)
           CREATE_OUTPUT=$(npx wrangler pages project create "$PROJECT_NAME" --production-branch="main" 2>&1) || true
           CREATE_EXIT_CODE=$?
 
@@ -204,10 +175,8 @@ jobs:
           echo "--- End Create Project Output ---"
           echo "Create Project Exit Code: $CREATE_EXIT_CODE"
 
-          # Check for specific error "Project already exists" - this is OK for idempotency
           if echo "$CREATE_OUTPUT" | grep -q "A project with this name already exists"; then
             echo "Project '$PROJECT_NAME' already exists. Proceeding with deployment."
-          # Check for other errors
           elif [ $CREATE_EXIT_CODE -ne 0 ]; then
             echo "::error:: Failed to create Cloudflare Pages project '$PROJECT_NAME'. Exit code: $CREATE_EXIT_CODE"
             echo "status=failure" >> $GITHUB_OUTPUT
@@ -215,7 +184,6 @@ jobs:
             exit 1
           fi
           echo "Cloudflare Pages project creation/verification successful."
-          # Pass the project name for the next step (though it's already available)
           echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
 
       - name: Deploy to Cloudflare Pages
@@ -224,14 +192,10 @@ jobs:
         run: |
           OUTPUT_DIR="${{ steps.httrack_clone.outputs.output_dir }}"
           PROJECT_NAME="${{ steps.create_cf_project.outputs.project_name }}"
-      
-          # Extract domain without protocol (e.g. "www.example.com")
+
           TARGET_DOMAIN=$(echo "${{ github.event.inputs.websiteUrl }}" | sed -E 's|^https?://||;s|/.*$||')
-          
-          # Find the exact HTTrack-created folder (e.g. "www.example.com")
           DEPLOY_DIR="$OUTPUT_DIR/$TARGET_DOMAIN"
-          
-          # Verify the folder exists and contains index.html
+
           if [ ! -d "$DEPLOY_DIR" ] || [ ! -f "$DEPLOY_DIR/index.html" ]; then
             echo "::error:: Correct subfolder '$TARGET_DOMAIN' not found or missing index.html"
             echo "Directory contents:"
@@ -240,30 +204,30 @@ jobs:
             echo "error_message=HTTrack did not create expected '$TARGET_DOMAIN' subfolder." >> $GITHUB_OUTPUT
             exit 1
           fi
-      
+
           echo "Deploying from verified subfolder: $DEPLOY_DIR"
           ls -la "$DEPLOY_DIR"
-      
+
           WRANGLER_STDOUT_FILE=$(mktemp)
           WRANGLER_STDERR_FILE=$(mktemp)
-          
+
           npx wrangler pages deploy "$DEPLOY_DIR" --project-name="$PROJECT_NAME" > "$WRANGLER_STDOUT_FILE" 2> "$WRANGLER_STDERR_FILE" || true
           WRANGLER_EXIT_CODE=$?
-      
+
           DEPLOY_OUTPUT=$(cat "$WRANGLER_STDOUT_FILE" "$WRANGLER_STDERR_FILE")
           rm -f "$WRANGLER_STDOUT_FILE" "$WRANGLER_STDERR_FILE"
-      
+
           echo "--- Wrangler Deploy Output ---"
           echo "$DEPLOY_OUTPUT"
           echo "Wrangler Deploy Exit Code: $WRANGLER_EXIT_CODE"
-      
+
           if [ $WRANGLER_EXIT_CODE -ne 0 ]; then
             echo "::error:: Wrangler deploy command failed with exit code $WRANGLER_EXIT_CODE."
             echo "status=failure" >> $GITHUB_OUTPUT
             echo "error_message=Failed to deploy to Cloudflare Pages (Code: $WRANGLER_EXIT_CODE)." >> $GITHUB_OUTPUT
             exit 1
           fi
-      
+
           PREVIEW_URL=$(echo "$DEPLOY_OUTPUT" | grep -o 'https://.*\.pages\.dev')
           if [ -z "$PREVIEW_URL" ]; then
             echo "::error:: Failed to extract Cloudflare Pages URL from deploy output."
@@ -271,48 +235,94 @@ jobs:
             echo "error_message=Deployment succeeded but failed to extract preview URL." >> $GITHUB_OUTPUT
             exit 1
           fi
-      
+
           echo "Deployment successful: $PREVIEW_URL"
           echo "preview_url=$PREVIEW_URL" >> $GITHUB_OUTPUT
           echo "status=success" >> $GITHUB_OUTPUT
 
-      - name: Send Callback to Cloudflare Worker
-        # Always run this step to report status
+      - name: Final Status and Callback
+        id: final_status
         if: always()
-        env:
-          CALLBACK_URL: ${{ secrets.CLOUDFLARE_WORKER_CALLBACK_URL }}
-          USER_EMAIL: ${{ github.event.inputs.email }}
-          WEBSITE_URL: ${{ github.event.inputs.websiteUrl }}
-          # Use the outputs from the robust final_status step
-          STATUS: ${{ steps.final_status.outputs.status }}
-          PREVIEW_URL: ${{ steps.final_status.outputs.preview_url }}
-          ERROR_MSG: ${{ steps.final_status.outputs.error_message }}
+        # Aggregate status and error message from previous steps
         run: |
-          echo "Sending callback to $CALLBACK_URL"
-          echo "Status: $STATUS"
-          echo "Preview URL: $PREVIEW_URL"
-          echo "Error: $ERROR_MSG"
+          STATUS=$( steps.status_init.outputs.status )
+          PREVIEW_URL=$( steps.deploy_pages.outputs.preview_url )
+          ERROR_MESSAGE=$( steps.status_init.outputs.error_message )
+
+          if [ "${{ steps.install_tools.outcome }}" != "success" ] || [ "${{ steps.install_wrangler.outcome }}" != "success" ] || [ "${{ steps.configure_git.outcome }}" != "success" ] || [ "${{ steps.authenticate_gh.outcome }}" != "success" ] || [ "${{ steps.httrack_clone.outcome }}" != "success" ] || [ "${{ steps.create_repo.outcome }}" != "success" ] || [ "${{ steps.push_code.outcome }}" != "success" ] || [ "${{ steps.create_cf_project.outcome }}" != "success" ] || [ "${{ steps.deploy_pages.outcome }}" != "success" ]; then
+            STATUS="failure"
+            ERROR_MESSAGE="" # Reset error message for aggregation
+
+            if [ "${{ steps.install_tools.outcome }}" != "success" ]; then
+              ERROR_MESSAGE+="\nInstall tools failed."
+            fi
+            if [ "${{ steps.install_wrangler.outcome }}" != "success" ]; then
+              ERROR_MESSAGE+="\nWrangler installation failed."
+            fi
+            if [ "${{ steps.configure_git.outcome }}" != "success" ]; then
+              ERROR_MESSAGE+="\nGit configuration failed."
+            fi
+            if [ "${{ steps.authenticate_gh.outcome }}" != "success" ]; then
+              ERROR_MESSAGE+="\nGitHub authentication failed."
+            fi
+            if [ "${{ steps.httrack_clone.outcome }}" != "success" ]; then
+              ERROR_MESSAGE+="\nWebsite cloning (HTTrack) failed. Error: ${{ steps.httrack_clone.outputs.error_message }}"
+            fi
+            if [ "${{ steps.create_repo.outcome }}" != "success" ]; then
+              ERROR_MESSAGE+="\nRepository creation failed. Error: ${{ steps.create_repo.outputs.error_message }}"
+            fi
+            if [ "${{ steps.push_code.outcome }}" != "success" ]; then
+              ERROR_MESSAGE+="\nCode push failed. Error: ${{ steps.push_code.outputs.error_message }}"
+            fi
+            if [ "${{ steps.create_cf_project.outcome }}" != "success" ]; then
+              ERROR_MESSAGE+="\nCloudflare Pages project creation failed. Error: ${{ steps.create_cf_project.outputs.error_message }}"
+            fi
+            if [ "${{ steps.deploy_pages.outcome }}" != "success" ]; then
+              ERROR_MESSAGE+="\nDeployment to Cloudflare Pages failed. Error: ${{ steps.deploy_pages.outputs.error_message }}"
+            fi
+            if [ -z "$ERROR_MESSAGE" ]; then
+              ERROR_MESSAGE="Unknown error occurred during workflow."
+            fi
+
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "error_message=$ERROR_MESSAGE" >> $GITHUB_OUTPUT
+            echo "preview_url=''" >> $GITHUB_OUTPUT # Clear preview URL on failure
+
+            STATUS="failure"
+            PREVIEW_URL="" # Clear preview URL in script context as well
+          else
+            STATUS="success" # Override status to success if all steps are successful, even if init was pending.
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+
+          echo "Final Status: $STATUS"
+          echo "Final Preview URL: $PREVIEW_URL"
+          echo "Final Error Message: $ERROR_MESSAGE"
+
+          echo "::group::Send Callback"
+          CALLBACK_URL="${{ secrets.CLOUDFLARE_WORKER_CALLBACK_URL }}"
+          USER_EMAIL="${{ github.event.inputs.email }}"
+          WEBSITE_URL="${{ github.event.inputs.websiteUrl }}"
 
           # Ensure STATUS is never empty before sending
           if [ -z "$STATUS" ]; then
             echo "::error:: STATUS is empty, setting to failure before callback."
             STATUS="failure"
-            ERROR_MSG="Workflow failed to determine final status."
+            ERROR_MESSAGE="Workflow failed to determine final status."
           fi
 
-          # Construct JSON payload using jq for safety
           JSON_PAYLOAD=$(jq -n \
             --arg status "$STATUS" \
             --arg email "$USER_EMAIL" \
             --arg website "$WEBSITE_URL" \
             --arg url "$PREVIEW_URL" \
-            --arg error "$ERROR_MSG" \
+            --arg error "$ERROR_MESSAGE" \
             '{status: $status, userEmail: $email, websiteUrl: $website, previewUrl: $url, errorMessage: $error}')
 
           echo "Payload: $JSON_PAYLOAD"
 
-          # Send POST request
           curl -X POST "$CALLBACK_URL" \
             -H "Content-Type: application/json" \
             -d "$JSON_PAYLOAD" \
-            --fail --silent --show-error # Make curl fail on HTTP errors and show them
+            --fail --silent --show-error
+          echo "::endgroup::"
